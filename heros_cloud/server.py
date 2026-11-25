@@ -8,6 +8,7 @@ import os
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from .agent_orchestrator import AgentOrchestrator
 from .engine import WorkflowEngine
 from .eval import run_evaluation
 from .policies import PolicyStore
@@ -17,6 +18,7 @@ from .workflows import generate_workflows
 WORKFLOWS = {workflow.id: workflow for workflow in generate_workflows(50)}
 STORE = PolicyStore()
 ENGINE = WorkflowEngine(STORE)
+AGENT_SERVICE = AgentOrchestrator()
 EXECUTIONS = []
 PRICING = [
     {"name": "Free", "price": 0, "features": ["MIT CLI", "Local workflows", "No hosted receipts"]},
@@ -79,6 +81,27 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "policy not found"})
         if self.path == "/v1/evaluate":
             return self._send(200, run_evaluation())
+        if self.path == "/v1/agent/orchestrate":
+            prompt = body.get("prompt", "")
+            schema = body.get("schema", {})
+            context = AGENT_SERVICE.build_context(
+                prompt=prompt,
+                context_vars=body.get("context_vars", {}),
+                contract_schema=schema,
+                max_tokens=body.get("max_tokens", 1024),
+            )
+            return self._send(200, AGENT_SERVICE.orchestrate(context))
+        if self.path == "/v1/agent/stream":
+            prompt = body.get("prompt", "")
+            chunks = body.get("chunks", ["analyzing context", "synthesizing output", "completed"])
+            context = AGENT_SERVICE.build_context(prompt=prompt)
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("cache-control", "no-cache")
+            self.end_headers()
+            for sse, _ in AGENT_SERVICE.stream_orchestration(context, chunks):
+                self.wfile.write(sse.encode())
+            return
         return self._send(404, {"error": "not found"})
 
     def log_message(self, *_args):
